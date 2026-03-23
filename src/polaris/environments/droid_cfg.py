@@ -112,6 +112,8 @@ class SceneCfg(InteractiveSceneCfg):
         environment_path_ = Path(environment_path)
         environment_path = str(environment_path_.resolve())
 
+        rigid_body_names = []
+
         scene = AssetBaseCfg(
             prim_path="{ENV_REGEX_NS}/scene",
             spawn=sim_utils.UsdFileCfg(
@@ -168,6 +170,7 @@ class SceneCfg(InteractiveSceneCfg):
                     ),
                 )
                 setattr(self, name, asset)
+                rigid_body_names.append(name)
 
         if not hasattr(self, "external_cam"):
             self.external_cam = CameraCfg(
@@ -187,6 +190,8 @@ class SceneCfg(InteractiveSceneCfg):
                     convention="opengl",
                 ),
             )
+
+        return rigid_body_names
 
 
 ### SceneCfg ###
@@ -312,6 +317,19 @@ class EventCfg:
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
+    # Mild randomization of arm joint actuator gains
+    randomize_arm_actuator_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"]),
+            "stiffness_distribution_params": (0.9, 1.1),
+            "damping_distribution_params": (0.9, 1.1),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+
 
 @configclass
 class CommandsCfg:
@@ -361,7 +379,41 @@ class EnvCfg(ManagerBasedRLEnvCfg):
         self.rerender_on_reset = True
 
     def dynamic_setup(self, *args):
-        self.scene.dynamic_setup(*args)
+        rigid_body_names = self.scene.dynamic_setup(*args)
+
+        # Add randomized friction and mass for all dynamically added rigid body assets
+        for name in rigid_body_names:
+            setattr(
+                self.events,
+                f"{name}_material",
+                EventTerm(
+                    func=mdp.randomize_rigid_body_material,
+                    mode="reset",
+                    params={
+                        "static_friction_range": (1.0, 2.0),
+                        "dynamic_friction_range": (0.9, 1.9),
+                        "restitution_range": (0.0, 0.0),
+                        "num_buckets": 256,
+                        "asset_cfg": SceneEntityCfg(name),
+                        "make_consistent": True,
+                    },
+                ),
+            )
+            setattr(
+                self.events,
+                f"{name}_mass",
+                EventTerm(
+                    func=mdp.randomize_rigid_body_mass,
+                    mode="reset",
+                    params={
+                        "asset_cfg": SceneEntityCfg(name),
+                        "mass_distribution_params": (0.8, 1.2),
+                        "operation": "scale",
+                        "distribution": "uniform",
+                        "recompute_inertia": True,
+                    },
+                ),
+            )
 
 
 #### END DROID ####
